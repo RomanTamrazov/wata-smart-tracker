@@ -1,0 +1,64 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: sqlite:////app/data/wata_tracker.db
+      APP_TIMEZONE: Europe/Moscow
+      ENABLE_REMINDER_WORKER: "true"
+      REMINDER_WORKER_INTERVAL_SECONDS: "${REMINDER_WORKER_INTERVAL_SECONDS:-300}"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:1b}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-}"
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USER: "${SMTP_USER:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM: "${SMTP_FROM:-}"
+      SMTP_STARTTLS: "${SMTP_STARTTLS:-true}"
+      SMTP_SSL: "${SMTP_SSL:-false}"
+      UPLOAD_DIR: "/app/storage/uploads"
+      MAX_UPLOAD_SIZE_MB: "${MAX_UPLOAD_SIZE_MB:-20}"
+      OCR_ENABLED: "${OCR_ENABLED:-true}"
+      OCR_LANG: "${OCR_LANG:-rus+eng}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_API_BASE: "${TELEGRAM_API_BASE:-https://api.telegram.org}"
+      TELEGRAM_POLL_INTERVAL_SECONDS: "${TELEGRAM_POLL_INTERVAL_SECONDS:-2}"
+      TELEGRAM_LOGIN_ATTEMPT_LIMIT: "${TELEGRAM_LOGIN_ATTEMPT_LIMIT:-5}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - wata_data:/app/data
+      - wata_uploads:/app/storage/uploads
+    expose:
+      - "8000"
+
+  telegram-bot:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_API_BASE: "${TELEGRAM_API_BASE:-https://api.telegram.org}"
+      TELEGRAM_POLL_INTERVAL_SECONDS: "${TELEGRAM_POLL_INTERVAL_SECONDS:-2}"
+      TELEGRAM_BACKEND_BASE: "http://backend:8000/api/v1"
+      TELEGRAM_LOGIN_ATTEMPT_LIMIT: "${TELEGRAM_LOGIN_ATTEMPT_LIMIT:-5}"
+    command: ["python", "-m", "app.services.telegram_bot"]
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api/v1
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  wata_data:
+  wata_uploads:
