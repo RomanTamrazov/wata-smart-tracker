@@ -204,7 +204,7 @@ export function ParentDashboard({ session }: ParentDashboardProps) {
           {(feed?.student_summaries ?? []).map((summary) => (
             <article key={summary.student_id} className="summary-card">
               <p>
-                <strong>Ученик:</strong> {summary.student_id.slice(0, 8)}...
+                <strong>Ученик:</strong> {summary.student_name?.trim() || `${summary.student_id.slice(0, 8)}...`}
               </p>
               <p>
                 Выполнено {summary.completed_tasks} из {summary.total_tasks}
