@@ -11,6 +11,11 @@ import { roleLabel } from "./labels";
 import type { Role, SessionData } from "./types";
 
 const STORAGE_KEY = "wata_session";
+const TELEGRAM_BOT_USERNAME = (import.meta.env.VITE_TELEGRAM_BOT_USERNAME ?? "").trim().replace(/^@/, "");
+const TELEGRAM_BOT_URL = (
+  import.meta.env.VITE_TELEGRAM_BOT_URL
+  ?? (TELEGRAM_BOT_USERNAME ? `https://t.me/${TELEGRAM_BOT_USERNAME}` : "/api/v1/system/telegram")
+).trim();
 
 function readSession(): SessionData | null {
   const raw = localStorage.getItem(STORAGE_KEY);
@@ -57,9 +62,14 @@ function Shell({ session, onLogout, children }: ShellProps) {
             <h1>{session.user.full_name}</h1>
             <small>{session.user.email}</small>
           </div>
-          <button className="button ghost" onClick={onLogout}>
-            Выйти
-          </button>
+          <div className="top-bar-actions">
+            <a className="button ghost" href={TELEGRAM_BOT_URL} target="_blank" rel="noreferrer">
+              Telegram-бот
+            </a>
+            <button className="button ghost" onClick={onLogout}>
+              Выйти
+            </button>
+          </div>
         </header>
       )}
       <main>{children}</main>
