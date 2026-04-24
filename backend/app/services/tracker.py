@@ -927,6 +927,7 @@ class TrackerService:
 
     def progress(self, session: Session, student_id: str) -> ProgressResponse:
         tasks = session.exec(select(Task).where(Task.student_id == student_id)).all()
+        student = session.get(User, student_id)
         total = len(tasks)
         completed = sum(1 for task in tasks if task.status == TaskStatus.DONE)
         now = moscow_now()
@@ -951,6 +952,7 @@ class TrackerService:
 
         return ProgressResponse(
             student_id=student_id,
+            student_name=student.full_name if student else None,
             total_tasks=total,
             completed_tasks=completed,
             overdue_tasks=overdue,
