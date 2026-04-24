@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlmodel import Session
 
+from app.config import settings
 from app.models import ClassJoinStatus, HelpRequestStatus, User
 from app.schemas import (
     AnalyticsResponse,
@@ -59,6 +61,9 @@ from app.schemas import (
     TelegramLoginResponse,
     TelegramNoteRequest,
     TelegramNoteResponse,
+    TelegramPhotoSubmissionResponse,
+    TelegramTaskStatusRequest,
+    TelegramTaskStatusResponse,
     TelegramTasksResponse,
     UpdateTaskStatusRequest,
     UserView,
@@ -66,6 +71,34 @@ from app.schemas import (
 from app.services.tracker import TrackerService
 
 router = APIRouter(prefix="/api/v1")
+
+
+def _telegram_public_url() -> str:
+    explicit = (settings.public_telegram_bot_url or "").strip()
+    if explicit:
+        return explicit
+
+    username = settings.telegram_bot_username.strip().replace("@", "")
+    if username:
+        return f"https://t.me/{username}"
+
+    token = settings.telegram_bot_token
+    if token:
+        try:
+            response = httpx.get(
+                f"{settings.telegram_api_base.rstrip('/')}/bot{token}/getMe",
+                timeout=5.0,
+            )
+            if response.status_code < 400:
+                payload = response.json()
+                result = payload.get("result") or {}
+                found = str(result.get("username") or "").strip().replace("@", "")
+                if found:
+                    return f"https://t.me/{found}"
+        except Exception:
+            pass
+
+    return "https://t.me"
 
 
 def get_session(request: Request):
@@ -111,6 +144,11 @@ def login(
 @router.get("/auth/me", response_model=UserView, tags=["auth"])
 def me(user: User = Depends(get_current_user)):
     return UserView(id=user.id, role=user.role, full_name=user.full_name, email=user.email)
+
+
+@router.get("/system/telegram", include_in_schema=False, tags=["system"])
+def telegram_public_redirect():
+    return RedirectResponse(url=_telegram_public_url(), status_code=302)
 
 
 @router.post("/links/student-teacher", tags=["links"])
@@ -676,3 +714,35 @@ def telegram_done(
 ):
     task = tracker.telegram_mark_done(session, payload.chat_id, payload.task_id)
     return TelegramDoneResponse(status="ok", task=task)
+
+
+@router.post("/telegram/tasks/status", response_model=TelegramTaskStatusResponse, tags=["telegram"])
+def telegram_task_status(
+    payload: TelegramTaskStatusRequest,
+    session: Session = Depends(get_session),
+    tracker: TrackerService = Depends(get_tracker),
+):
+    task = tracker.telegram_set_status(
+        session=session,
+        chat_id=payload.chat_id,
+        task_id=payload.task_id,
+        status=payload.status,
+    )
+    return TelegramTaskStatusResponse(status="ok", task=task)
+
+
+@router.post("/telegram/submissions/photo", response_model=TelegramPhotoSubmissionResponse, tags=["telegram"])
+def telegram_submission_photo(
+    chat_id: Annotated[str, Form(...)],
+    task_id: Annotated[str, Form(...)],
+    file: Annotated[UploadFile, File(...)],
+    session: Session = Depends(get_session),
+    tracker: TrackerService = Depends(get_tracker),
+):
+    submission = tracker.telegram_submit_photo(
+        session=session,
+        chat_id=chat_id,
+        task_id=task_id,
+        upload_file=file,
+    )
+    return TelegramPhotoSubmissionResponse(status="ok", submission=submission)
