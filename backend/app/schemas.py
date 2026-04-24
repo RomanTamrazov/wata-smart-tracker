@@ -524,3 +524,19 @@ class TelegramDoneRequest(BaseModel):
 class TelegramDoneResponse(BaseModel):
     status: str
     task: TaskView
+
+
+class TelegramTaskStatusRequest(BaseModel):
+    chat_id: str
+    task_id: str
+    status: TaskStatus
+
+
+class TelegramTaskStatusResponse(BaseModel):
+    status: str
+    task: TaskView
+
+
+class TelegramPhotoSubmissionResponse(BaseModel):
+    status: str
+    submission: TaskSubmissionView
