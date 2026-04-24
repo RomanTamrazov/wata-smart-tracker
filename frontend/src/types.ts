@@ -92,6 +92,7 @@ export interface PlanResponse {
 
 export interface Progress {
   student_id: string;
+  student_name?: string | null;
   total_tasks: number;
   completed_tasks: number;
   overdue_tasks: number;
