@@ -5,6 +5,7 @@ import re
 import time
 from datetime import datetime
 from dataclasses import dataclass
+from urllib.parse import quote
 
 import httpx
 
@@ -18,12 +19,15 @@ class BotConfig:
     api_base: str
     backend_base: str
     poll_interval: int
+    web_url: str
 
 
 @dataclass(slots=True)
 class ChatState:
     pending_action: str | None = None
     login_email: str | None = None
+    quick_task_id: str | None = None
+    photo_task_id: str | None = None
 
 
 class TelegramBotRunner:
@@ -173,15 +177,18 @@ class TelegramBotRunner:
             "Если нужно, я подскажу тактику по конкретному предмету. Напишите: «Помоги с алгеброй/русским»."
         )
 
-    @staticmethod
-    def _main_keyboard() -> dict:
+    def _main_keyboard(self) -> dict:
+        rows = [
+            [{"text": "🔐 Войти"}, {"text": "📋 Мои задачи"}],
+            [{"text": "➕ Добавить задачу"}, {"text": "🔥 Срочные"}],
+            [{"text": "⚡ Сдал/не сдал"}, {"text": "📷 Фото домашки"}],
+            [{"text": "✅ Отметить выполненной"}, {"text": "🧠 Как решать?"}],
+            [{"text": "❓ Помощь"}],
+        ]
+        if self._cfg.web_url:
+            rows.insert(1, [{"text": "🌐 Открыть сайт"}])
         return {
-            "keyboard": [
-                [{"text": "🔐 Войти"}, {"text": "📋 Мои задачи"}],
-                [{"text": "➕ Добавить задачу"}, {"text": "🔥 Срочные"}],
-                [{"text": "✅ Отметить выполненной"}, {"text": "🧠 Как решать?"}],
-                [{"text": "❓ Помощь"}],
-            ],
+            "keyboard": rows,
             "resize_keyboard": True,
             "is_persistent": True,
         }
@@ -208,7 +215,63 @@ class TelegramBotRunner:
             return match.group(0).lower()
         return raw
 
+    def _task_site_url(self, task_id: str) -> str:
+        if not self._cfg.web_url:
+            return ""
+        redirect = quote(f"/dashboard/student?task_id={task_id}", safe="")
+        return f"{self._cfg.web_url}/auth?mode=login&redirect={redirect}"
+
+    def _task_inline_actions(self, task_id: str) -> dict:
+        rows: list[list[dict[str, str]]] = [
+            [
+                {"text": "✅ Сдал", "callback_data": f"done:{task_id}"},
+                {"text": "❌ Не сдал", "callback_data": f"todo:{task_id}"},
+            ],
+        ]
+        site_url = self._task_site_url(task_id)
+        if site_url:
+            rows.append([{"text": "🌐 Открыть задание на сайте", "url": site_url}])
+        return {"inline_keyboard": rows}
+
+    def _answer_callback_query(self, callback_query_id: str, text: str = "") -> None:
+        try:
+            payload: dict[str, object] = {"callback_query_id": callback_query_id}
+            if text:
+                payload["text"] = text[:120]
+                payload["show_alert"] = False
+            httpx.post(
+                f"{self._cfg.api_base}/bot{self._cfg.token}/answerCallbackQuery",
+                json=payload,
+                timeout=10.0,
+            )
+        except Exception as exc:
+            print(f"[telegram-bot] answerCallbackQuery error: {exc}")
+
     def _handle_update(self, update: dict) -> None:
+        callback_query = update.get("callback_query") or {}
+        if callback_query:
+            callback_id = str(callback_query.get("id") or "")
+            data = str(callback_query.get("data") or "")
+            callback_message = callback_query.get("message") or {}
+            callback_chat = callback_message.get("chat") or {}
+            chat_id = str(callback_chat.get("id") or "")
+            if not chat_id or ":" not in data:
+                if callback_id:
+                    self._answer_callback_query(callback_id)
+                return
+            action, task_id = data.split(":", 1)
+            if action == "done":
+                ok = self._cmd_set_status(chat_id, task_id, "done")
+                self._answer_callback_query(callback_id, "Отмечено: сдал" if ok else "Не удалось обновить статус")
+                return
+            if action == "todo":
+                ok = self._cmd_set_status(chat_id, task_id, "todo")
+                self._answer_callback_query(callback_id, "Отмечено: не сдал" if ok else "Не удалось обновить статус")
+                return
+            if callback_id:
+                self._answer_callback_query(callback_id)
+            return
+
         message = update.get("message") or {}
         chat = message.get("chat") or {}
         chat_id = str(chat.get("id") or "")
@@ -216,15 +279,42 @@ class TelegramBotRunner:
         if not chat_id:
             return
 
+        state = self._state(chat_id)
+
+        photos = list(message.get("photo") or [])
+        if photos:
+            if state.pending_action == "photo_upload" and state.photo_task_id:
+                photo_item = photos[-1]
+                file_id = str(photo_item.get("file_id") or "")
+                if file_id:
+                    success = self._cmd_submit_photo(chat_id, state.photo_task_id, file_id)
+                    if success:
+                        state.pending_action = None
+                        state.photo_task_id = None
+                        return
+                self._send_message(
+                    chat_id,
+                    "Не удалось принять фото. Повторите отправку или нажмите «Отмена».",
+                    reply_markup=self._cancel_keyboard(),
+                )
+                return
+            self._send_message(
+                chat_id,
+                "Сначала нажмите «📷 Фото домашки», выберите ID задачи и затем отправьте фото.",
+                reply_markup=self._main_keyboard(),
+            )
+            return
+
         text = str(message.get("text") or "").strip()
         if not text:
             return
 
-        state = self._state(chat_id)
-
         if text.startswith("/start"):
             state.pending_action = None
             state.login_email = None
+            state.quick_task_id = None
+            state.photo_task_id = None
+            website_hint = f"\nСайт: {self._cfg.web_url}\n" if self._cfg.web_url else ""
             self._send_message(
                 chat_id,
                 "Добро пожаловать в WATA Smart Tracker.\n\n"
@@ -232,7 +322,8 @@ class TelegramBotRunner:
                 "1) почту\n"
                 "2) пароль\n\n"
                 "Можно и командой: /login <email> <password>\n"
-                "Для безопасности сообщение с паролем в команде /login будет удалено автоматически.",
+                "Для безопасности сообщение с паролем в команде /login будет удалено автоматически."
+                f"{website_hint}",
                 reply_markup=self._main_keyboard(),
             )
             return
@@ -240,6 +331,8 @@ class TelegramBotRunner:
         if text == "Отмена":
             state.pending_action = None
             state.login_email = None
+            state.quick_task_id = None
+            state.photo_task_id = None
             self._send_message(
                 chat_id,
                 "Действие отменено.",
@@ -279,11 +372,20 @@ class TelegramBotRunner:
                 "2) Нажмите «➕ Добавить задачу» и отправьте текст.\n"
                 "3) Нажмите «📋 Мои задачи» для полного списка.\n"
                 "4) Нажмите «🔥 Срочные» для ближайших дедлайнов.\n"
-                "5) Нажмите «✅ Отметить выполненной», затем отправьте ID задачи.\n\n"
+                "5) Нажмите «⚡ Сдал/не сдал» для быстрого ответа по задаче.\n"
+                "6) Нажмите «📷 Фото домашки», выберите ID и отправьте фото решения.\n"
+                "7) Нажмите «✅ Отметить выполненной», затем отправьте ID задачи.\n\n"
                 "Для тактики решения нажмите «🧠 Как решать?».\n"
                 "В любой момент нажмите «Отмена».",
                 reply_markup=self._main_keyboard(),
             )
+            return
+
+        if text in {"🌐 Открыть сайт", "Открыть сайт"}:
+            if not self._cfg.web_url:
+                self._send_message(chat_id, "Публичный URL сайта пока не задан в настройках.", reply_markup=self._main_keyboard())
+                return
+            self._send_message(chat_id, f"Откройте сайт: {self._cfg.web_url}", reply_markup=self._main_keyboard())
             return
 
         if text in {"🧠 Как решать?", "Как решать", "Помоги решить", "Как решить"}:
@@ -312,6 +414,27 @@ class TelegramBotRunner:
                 chat_id,
                 "Отправьте ID задачи, которую нужно отметить выполненной.\n"
                 "ID можно скопировать из списка «📋 Мои задачи».",
+                reply_markup=self._cancel_keyboard(),
+            )
+            return
+
+        if text in {"⚡ Сдал/не сдал", "Сдал/не сдал"}:
+            state.pending_action = "quick_done_task"
+            state.quick_task_id = None
+            self._send_message(
+                chat_id,
+                "Отправьте ID задачи, по которой нужно быстро ответить.\n"
+                "После этого выберите «✅ Сдал» или «❌ Не сдал».",
+                reply_markup=self._cancel_keyboard(),
+            )
+            return
+
+        if text in {"📷 Фото домашки", "Фото домашки"}:
+            state.pending_action = "photo_task"
+            state.photo_task_id = None
+            self._send_message(
+                chat_id,
+                "Отправьте ID задачи, к которой хотите прикрепить фото решения.",
                 reply_markup=self._cancel_keyboard(),
             )
             return
@@ -346,6 +469,13 @@ class TelegramBotRunner:
                 self._send_message(chat_id, "Формат: /done <task_id>", reply_markup=self._main_keyboard())
                 return
             self._cmd_done(chat_id, self._extract_task_id(parts[1]))
+            return
+
+        if text.startswith("/site"):
+            if not self._cfg.web_url:
+                self._send_message(chat_id, "Публичный URL сайта пока не задан в настройках.", reply_markup=self._main_keyboard())
+                return
+            self._send_message(chat_id, f"Откройте сайт: {self._cfg.web_url}", reply_markup=self._main_keyboard())
             return
 
         if state.pending_action == "login_email":
@@ -392,6 +522,56 @@ class TelegramBotRunner:
             success = self._cmd_add(chat_id, text)
             if success:
                 state.pending_action = None
+            return
+
+        if state.pending_action == "quick_done_task":
+            state.quick_task_id = self._extract_task_id(text)
+            state.pending_action = "quick_done_confirm"
+            self._send_message(
+                chat_id,
+                "Выберите быстрый ответ:",
+                reply_markup={
+                    "keyboard": [[{"text": "✅ Сдал"}, {"text": "❌ Не сдал"}], [{"text": "Отмена"}]],
+                    "resize_keyboard": True,
+                    "one_time_keyboard": False,
+                    "is_persistent": False,
+                },
+            )
+            return
+
+        if state.pending_action == "quick_done_confirm":
+            if text in {"✅ Сдал", "Сдал"} and state.quick_task_id:
+                success = self._cmd_set_status(chat_id, state.quick_task_id, "done")
+                if success:
+                    state.pending_action = None
+                    state.quick_task_id = None
+                return
+            if text in {"❌ Не сдал", "Не сдал"} and state.quick_task_id:
+                success = self._cmd_set_status(chat_id, state.quick_task_id, "todo")
+                if success:
+                    state.pending_action = None
+                    state.quick_task_id = None
+                return
+            self._send_message(
+                chat_id,
+                "Нажмите «✅ Сдал», «❌ Не сдал» или «Отмена».",
+                reply_markup={
+                    "keyboard": [[{"text": "✅ Сдал"}, {"text": "❌ Не сдал"}], [{"text": "Отмена"}]],
+                    "resize_keyboard": True,
+                    "one_time_keyboard": False,
+                    "is_persistent": False,
+                },
+            )
+            return
+
+        if state.pending_action == "photo_task":
+            state.photo_task_id = self._extract_task_id(text)
+            state.pending_action = "photo_upload"
+            self._send_message(
+                chat_id,
+                "Теперь отправьте фото выполненной работы одним сообщением.",
+                reply_markup=self._cancel_keyboard(),
+            )
             return
 
         if state.pending_action == "done":
@@ -524,6 +704,16 @@ class TelegramBotRunner:
 
         self._send_message(chat_id, "\n".join(lines).strip(), reply_markup=self._main_keyboard())
 
+        for task in tasks[:5]:
+            task_id = str(task.get("id") or "").strip()
+            if not task_id:
+                continue
+            self._send_message(
+                chat_id,
+                f"Действия для задачи «{task.get('title', '')}»:",
+                reply_markup=self._task_inline_actions(task_id),
+            )
+
     def _cmd_done(self, chat_id: str, task_id: str) -> bool:
         response = httpx.post(
             f"{self._cfg.backend_base}/telegram/tasks/done",
@@ -546,6 +736,92 @@ class TelegramBotRunner:
         )
         return True
 
+    def _cmd_set_status(self, chat_id: str, task_id: str, status: str) -> bool:
+        response = httpx.post(
+            f"{self._cfg.backend_base}/telegram/tasks/status",
+            json={"chat_id": chat_id, "task_id": task_id, "status": status},
+            timeout=15.0,
+        )
+        if response.status_code >= 400:
+            self._send_message(
+                chat_id,
+                f"Не удалось обновить статус: {self._extract_error(response)}",
+                reply_markup=self._main_keyboard(),
+            )
+            return False
+        task = response.json().get("task") or {}
+        if status == "done":
+            text = f"✅ Отмечено «Сдал»: {task.get('title', '')}"
+        else:
+            text = f"❌ Отмечено «Не сдал»: {task.get('title', '')}"
+        self._send_message(chat_id, text, reply_markup=self._main_keyboard())
+        return True
+
+    def _cmd_submit_photo(self, chat_id: str, task_id: str, file_id: str) -> bool:
+        try:
+            file_meta_response = httpx.get(
+                f"{self._cfg.api_base}/bot{self._cfg.token}/getFile",
+                params={"file_id": file_id},
+                timeout=15.0,
+            )
+            file_meta_response.raise_for_status()
+            file_meta = file_meta_response.json()
+            if not file_meta.get("ok"):
+                self._send_message(chat_id, "Не удалось получить фото из Telegram.", reply_markup=self._cancel_keyboard())
+                return False
+            file_path = str((file_meta.get("result") or {}).get("file_path") or "")
+            if not file_path:
+                self._send_message(chat_id, "Telegram не вернул путь к файлу.", reply_markup=self._cancel_keyboard())
+                return False
+
+            file_response = httpx.get(
+                f"{self._cfg.api_base}/file/bot{self._cfg.token}/{file_path}",
+                timeout=25.0,
+            )
+            file_response.raise_for_status()
+            content = file_response.content
+            if not content:
+                self._send_message(chat_id, "Фото оказалось пустым. Отправьте ещё раз.", reply_markup=self._cancel_keyboard())
+                return False
+
+            file_name = os.path.basename(file_path) or "photo.jpg"
+            lowered = file_name.lower()
+            if lowered.endswith(".png"):
+                mime = "image/png"
+            elif lowered.endswith(".webp"):
+                mime = "image/webp"
+            else:
+                mime = "image/jpeg"
+
+            backend_response = httpx.post(
+                f"{self._cfg.backend_base}/telegram/submissions/photo",
+                data={"chat_id": chat_id, "task_id": task_id},
+                files={"file": (file_name, content, mime)},
+                timeout=45.0,
+            )
+            if backend_response.status_code >= 400:
+                self._send_message(
+                    chat_id,
+                    f"Не удалось прикрепить фото: {self._extract_error(backend_response)}",
+                    reply_markup=self._cancel_keyboard(),
+                )
+                return False
+
+            self._send_message(
+                chat_id,
+                "📷 Фото решения загружено.\n"
+                "Теперь можно нажать «✅ Сдал» в карточке задачи или кнопку быстрого ответа.",
+                reply_markup=self._main_keyboard(),
+            )
+            return True
+        except Exception as exc:
+            self._send_message(
+                chat_id,
+                f"Ошибка при отправке фото: {exc}",
+                reply_markup=self._cancel_keyboard(),
+            )
+            return False
+
     @staticmethod
     def _extract_error(response: httpx.Response) -> str:
         try:
@@ -563,11 +839,15 @@ def build_config() -> BotConfig:
     if not token:
         raise RuntimeError("Укажите TELEGRAM_BOT_TOKEN")
     backend_base = os.getenv("TELEGRAM_BACKEND_BASE", "http://127.0.0.1:8000/api/v1").rstrip("/")
+    web_url = (settings.public_web_url or os.getenv("PUBLIC_WEB_URL", "")).strip().rstrip("/")
+    if not web_url and backend_base.endswith("/api/v1"):
+        web_url = backend_base[: -len("/api/v1")]
     return BotConfig(
         token=token,
         api_base=settings.telegram_api_base.rstrip("/"),
         backend_base=backend_base,
         poll_interval=max(1, settings.telegram_poll_interval_seconds),
+        web_url=web_url,
     )
 
 
