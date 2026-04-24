@@ -24,7 +24,10 @@ cp .env.example .env
 ## Запуск Telegram-бота
 
 1. В `.env` задайте `TELEGRAM_BOT_TOKEN=...`
-2. Запустите:
+2. Для кнопок перехода бот ↔ сайт укажите:
+   - `PUBLIC_WEB_URL=https://ваш-публичный-домен`
+   - `VITE_TELEGRAM_BOT_URL=https://t.me/<username_бота>` или `VITE_TELEGRAM_BOT_USERNAME=<username_бота>`
+3. Запустите:
 
 ```bash
 cd ../wata-smart-tracker
