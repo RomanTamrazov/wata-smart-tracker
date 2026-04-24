@@ -41,6 +41,9 @@ class Settings:
     telegram_api_base: str = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org")
     telegram_poll_interval_seconds: int = int(os.getenv("TELEGRAM_POLL_INTERVAL_SECONDS", "2"))
     telegram_login_attempt_limit: int = int(os.getenv("TELEGRAM_LOGIN_ATTEMPT_LIMIT", "5"))
+    telegram_bot_username: str = os.getenv("TELEGRAM_BOT_USERNAME", "").strip()
+    public_telegram_bot_url: str = os.getenv("PUBLIC_TELEGRAM_BOT_URL", "").strip()
+    public_web_url: str = os.getenv("PUBLIC_WEB_URL", "").strip()
 
 
 settings = Settings()
