@@ -71,6 +71,12 @@ main {
   border-bottom: 1px solid var(--line);
 }
 
+.top-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
 .top-bar h1 {
   margin: 0;
   font-family: "Unbounded", "Avenir Next", sans-serif;
