@@ -1,6 +1,12 @@
 import { Link } from "react-router-dom";
 
 export function LandingPage() {
+  const telegramBotUsername = (import.meta.env.VITE_TELEGRAM_BOT_USERNAME ?? "").trim().replace(/^@/, "");
+  const telegramBotUrl = (
+    import.meta.env.VITE_TELEGRAM_BOT_URL
+    ?? (telegramBotUsername ? `https://t.me/${telegramBotUsername}` : "/api/v1/system/telegram")
+  ).trim();
+
   return (
     <div className="page landing">
       <header className="hero">
@@ -17,6 +23,9 @@ export function LandingPage() {
           <Link to="/auth?mode=login" className="button ghost">
             Уже есть аккаунт
           </Link>
+          <a href={telegramBotUrl} target="_blank" rel="noreferrer" className="button ghost">
+            Открыть Telegram-бот
+          </a>
         </div>
       </header>
 
