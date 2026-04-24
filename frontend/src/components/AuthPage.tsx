@@ -18,6 +18,11 @@ export function AuthPage({ onAuthed }: AuthPageProps) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const presetMode = searchParams.get("mode") === "register" ? "register" : "login";
+  const redirectPath = useMemo(() => {
+    const raw = (searchParams.get("redirect") ?? "").trim();
+    if (!raw || !raw.startsWith("/")) return "";
+    return raw;
+  }, [searchParams]);
 
   const [mode, setMode] = useState<"login" | "register">(presetMode);
   const [role, setRole] = useState<Role>("student");
@@ -77,7 +82,7 @@ export function AuthPage({ onAuthed }: AuthPageProps) {
           : await login({ email: normalizedEmail, password });
 
       onAuthed(session);
-      navigate(`/dashboard/${session.user.role}`);
+      navigate(redirectPath || `/dashboard/${session.user.role}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка авторизации");
     } finally {
