@@ -179,6 +179,7 @@ class ReminderRunResponse(BaseModel):
 
 class ProgressResponse(BaseModel):
     student_id: str
+    student_name: Optional[str] = None
     total_tasks: int
     completed_tasks: int
     overdue_tasks: int
