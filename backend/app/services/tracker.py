@@ -2307,11 +2307,25 @@ class TrackerService:
         return tasks
 
     def telegram_mark_done(self, session: Session, chat_id: str, task_id: str) -> TaskView:
+        return self.telegram_set_status(session=session, chat_id=chat_id, task_id=task_id, status=TaskStatus.DONE)
+
+    def telegram_set_status(self, session: Session, chat_id: str, task_id: str, status: TaskStatus) -> TaskView:
         user = self._telegram_student_user(session, chat_id)
         task = session.get(Task, task_id)
         if not task or task.student_id != user.id:
             raise HTTPException(status_code=404, detail="Задача не найдена")
-        return self.update_task_status(session=session, task_id=task.id, status=TaskStatus.DONE, actor=user)
+        return self.update_task_status(session=session, task_id=task.id, status=status, actor=user)
+
+    def telegram_submit_photo(self, session: Session, chat_id: str, task_id: str, upload_file) -> TaskSubmissionView:
+        user = self._telegram_student_user(session, chat_id)
+        return self.create_task_submission(
+            session=session,
+            actor=user,
+            task_id=task_id,
+            text_answer=None,
+            voice_transcript=None,
+            files=[upload_file],
+        )
 
     def current_user(self, session: Session, token: str) -> User:
         auth = session.get(AuthToken, token)
